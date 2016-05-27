@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+
+	<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+	<meta name="author" content="Sangyoon Lee">
+	<meta name="description" content="VirtualFence Software">
+
+  <title>VirtualFence</title>
+
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+  <link rel="stylesheet" href="https://code.getmdl.io/1.1.3/material.indigo-pink.min.css">
+
+  <style>
+  @import url('http://fonts.googleapis.com/earlyaccess/jejugothic.css');
+
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  body {
+    font: 12px/14px 'Jeju Gothic', sans-serif;
+  }
+
+  #map-canvas {
+    display: table;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .angular-google-map-container {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+  }
+
+  #server-status {
+    position: absolute;
+    cursor: default;
+    padding: 3px;
+    top: 5px;
+    left: 5px;
+    font-size: 11px;
+    text-align: center;
+    z-index: 10000;
+  }
+
+  .text-success {
+    color: #286500;
+  }
+
+  .text-warning {
+    color: #b20000;
+  }
+
+  .text-danger {
+    color: #b20000;
+  }
+
+  .connect-success {
+    border: 1px solid #286500;
+    color: #286500;
+    background-color: #C8EA00;
+  }
+
+  .connect-request {
+    border: 1px solid #b20000;
+    color: #b20000;
+    background-color: #FFC543;
+  }
+
+  .server-fail {
+    border: 1px solid #b20000;
+    color: #b20000;
+    background-color: #ff8989;
+  }
+
+  div.button {
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+  }
+
+  div.log {
+    display: none;
+    position: absolute;
+    overflow-y: scroll;
+    bottom: 10px;
+    right: 75px;
+    width: 400px;
+    height: 200px;
+    background-color: rgba(255, 255, 255, .4);
+  }
+
+  table.log {
+    width: 100%;
+  }
+  table.log th, table.log td {text-align: center;}
+
+
+  .quiet-scroll pre {
+    overflow:auto;
+    white-space:pre;
+    word-wrap:normal;
+    word-break:normal;
+  }
+
+  .quiet-scroll pre::-webkit-scrollbar,
+  .quiet-scroll::-webkit-scrollbar {
+    width:1px;
+    height:1px;
+    border-left:0;
+    background:rgba(0,0,0,0.1);
+  }
+
+  .quiet-scroll pre::-webkit-scrollbar-track,
+  .quiet-scroll::-webkit-scrollbar-track {
+    background:none;
+  }
+
+  .quiet-scroll pre::-webkit-scrollbar-thumb,
+  .quiet-scroll::-webkit-scrollbar-thumb {
+    background:rgba(0,0,0,0.4);
+    border-radius:0;
+  }
+
+  .quiet-scroll pre::-webkit-scrollbar:hover,
+  .quiet-scroll::-webkit-scrollbar:hover {
+    background:rgba(0,0,0,0.4);
+  }
+  </style>
+
+  <script>
+  window.$				= require('jquery'),
+  window.jsts 		= require('jsts'),
+  window.assert   = require('assert'),
+  window.MongoDB 	= require('mongodb'),
+  window.Socket   = require('socket.io-client');
+  </script>
+
+  <script src="./js/angular.js"></script>
+  <script src="./js/lodash.js"></script>
+  <script src="./js/angular-simple-logger.js"></script>
+  <script src="./js/angular-google-maps.min.js"></script>
+  <script src="./js/geojson.js"></script>
+  <script src="./js/inside.js"></script>
+  <script src="./js/polyk.js"></script>
+
+  <script>
+  var socket = Socket('http://222.116.135.139:3000');
+
+  var map = null;
+  var fences = new Map();
+  var index = 0;
+
+  var logger = new Map();
+
+  var VirtualFence = angular.module('VirtualFence', ['uiGmapgoogle-maps']);
+  VirtualFence
+  .config(['uiGmapGoogleMapApiProvider', (GoogleMapApiProviders) => {
+      GoogleMapApiProviders.configure({
+        //"key": ""
+        "korean": true,
+        "v": '3.24',
+        "libraries": "drawing,geometry"
+      });
+  }])
+  .controller('MapController', ($scope, uiGmapGoogleMapApi) => {
+    let initMapLoaded = false;
+
+    uiGmapGoogleMapApi.then((maps) => {
+
+      $scope.mapControl = {};
+      $scope.map = {
+        "center": {
+          "latitude": 36.94929,
+          "longitude": 127.90739
+        },
+        "zoom": 18,
+        "options": {
+          "disableDefaultUI": true
+        },
+        "events": {
+          "idle": () => {
+            if(initMapLoaded === false)
+            {
+              // Fetch VirtualFences in Database
+              let findFence = (database, callback) => {
+                let cursor = database.collection('fence').find();
+
+                cursor.each((error, document) => {
+        					assert.equal(error, null);
+
+                  if(document !== null)
+                  {
+                    let uid     = MongoDB.ObjectID(document._id).toString(),
+                        safety  = document.safe,
+                        warning = document.warn,
+                        danger  = document.danger;
+
+                    let safetyLayer = new GeoJSON(safety, {
+          								  "strokeColor": "#66cd00",
+          								"strokeOpacity": 1,
+          								 "strokeWeight": 1,
+          								    "fillColor": "#66cd00",
+          								  "fillOpacity": 0.35,
+          								       "zIndex": 5,
+          								          "map": $scope.mapControl.getGMap()
+          							}),
+                        warningLayer = new GeoJSON(warning, {
+          								  "strokeColor": "#ff4500",
+          								"strokeOpacity": 1,
+          								 "strokeWeight": 1,
+          								    "fillColor": "#ff4500",
+          								  "fillOpacity": 0.35,
+          								       "zIndex": 4,
+          								          "map": $scope.mapControl.getGMap()
+          							}),
+                        dangerLayer = new GeoJSON(danger, {
+          								  "strokeColor": "#ff0000",
+          								"strokeOpacity": 1,
+          								 "strokeWeight": 1,
+          								    "fillColor": "#ff0000",
+          								  "fillOpacity": 0.35,
+          								       "zIndex": 3,
+          								          "map": $scope.mapControl.getGMap()
+          							});
+
+                        let fence = {
+          								"reference": uid,
+          								  "polygon": {
+          									  "safe": safetyLayer,
+          									  "warn": warningLayer,
+          									"danger": dangerLayer
+          								},
+          								  "geojson": {
+          									  "safe": safety,
+          									  "warn": warning,
+          									"danger": danger
+          								},
+          								  "animals": new Map()
+          							};
+                        fences.set('fence' + (index++), fence);
+                  }
+                  else
+                  {
+                    callback();
+                  }
+                });
+              }
+
+      				MongoDB.MongoClient.connect('mongodb://222.116.135.139/virtualfence', (error, database) => {
+      					findFence(database, function() { database.close() });
+      				});
+
+              map = $scope.mapControl.getGMap();
+
+              initMapLoaded = true;
+            }
+          },
+          "click": () => {}
+        }
+      };
+
+      $scope.drawingManagerControl = {};
+      $scope.drawing = {
+        "options": {
+          "drawingMode": null,
+          "drawingControl": true,
+          "drawingControlOptions": {
+            "position": google.maps.ControlPosition.TOP_RIGHT,
+            "drawingModes": [google.maps.drawing.OverlayType.POLYGON]
+          },
+          "polygonOptions": {
+  					"strokeColor": "#ff0000",
+  					"strokeOpacity": 1,
+  					"strokeWeight": 1,
+  					"fillColor": "#ff0000",
+  					"fillOpacity": 0.25,
+  					"zIndex": 3
+  				},
+        },
+        "events": {
+          "polygoncomplete": (dm, name, scope, polygon) => {
+            $scope.drawingManagerControl.getDrawingManager().setDrawingMode(null);
+
+            let dangerLayer  = polygon[0],
+                warningLayer = dangerLayer.buffer(10, '#66cd00', 4),
+                safetyLayer  = dangerLayer.buffer( 5, '#ff4500', 5);
+
+            let fence = {
+    					"polygon": {
+    						  "safe": safetyLayer,
+    						  "warn": warningLayer,
+    						"danger": dangerLayer
+    					},
+    					 "geojson": {
+    						  "safe": safetyLayer.geoJSON(),
+    						  "warn": warningLayer.geoJSON(),
+    						"danger": dangerLayer.geoJSON()
+    					},
+              "animals": new Map()
+    				};
+            fences.set('fence' + (index++), fence);
+          }
+        }
+      };
+
+      // Convert Google Map Polygon to GeoJSON
+			google.maps.Polygon.prototype.geoJSON = function() {
+				var array = [];
+
+				this.getPath().forEach((latlng, i) => {
+					array.push([latlng.lng(), latlng.lat()]);
+				});
+				array.push(array[0]);
+
+				return {
+					"type": "Feature",
+					"geometry": {
+						"type": "Polygon",
+						"coordinates": [array]
+					},
+					"properties": {}
+				};
+			};
+
+			// Polygon Buffering
+			google.maps.Polygon.prototype.buffer = function(distance, color, zindex) {
+				var geoReader = new jsts.io.GeoJSONReader();
+				var geoWriter = new jsts.io.GeoJSONWriter();
+
+				var geojson = this.geoJSON();
+				var buffer = geoReader.read(geojson.geometry).buffer(-(distance / 111120));
+				var polygon = geoWriter.write(buffer);
+
+				return new GeoJSON(polygon, {
+					"strokeColor": color,
+					"strokeOpacity": 1,
+					"strokeWeight": 1,
+					"fillColor": color,
+					"fillOpacity": 0.35,
+					"zIndex": zindex,
+					"map": $scope.mapControl.getGMap()
+				});
+			};
+
+      // Convert Polygon to Edge Array
+			google.maps.Polygon.prototype.edges = function() {
+					let e = [];
+					this.getPath().forEach((t , n) => { e.push(t)	});
+					return e.map((t, n) => { return n ? [e[n - 1], t] : [e[e.length - 1], t]; });
+			};
+
+			// Convert Polygon to Array
+			google.maps.Polygon.prototype.toArray = function() {
+				var e = [];
+				this.getPath().forEach((t, n) => { let r = t.toPoint(); e.push(r.x); e.push(r.y);	});
+
+				return e;
+			};
+
+			// Find Closest Edge
+			google.maps.Polygon.prototype.closestPoint = function(e) {
+					var t = this.toArray(),
+							n = e.getPosition().toPoint(),
+							r = PolyK.ClosestEdge(t, n.x, n.y),
+							i = new google.maps.Point(r.point.x, r.point.y);
+
+          return i;
+			};
+
+			// Convert Google Map LatLng to Point(Pixel)
+			google.maps.LatLng.prototype.toPoint = function() {
+					var e = map.getProjection().fromLatLngToPoint(this);
+					var t = Math.pow(2, map.getZoom());
+					var n = new google.maps.Point(e.x * t, e.y * t);
+
+					return n;
+			};
+
+			// Convert Point(Pixel) to Google Map LatLng
+			google.maps.Point.prototype.toLatLng = function() {
+					var e = Math.pow(2, map.getZoom());
+					var t = new google.maps.Point(this.x / e, this.y / e);
+					var n = map.getProjection().fromPointToLatLng(t);
+
+					return n;
+			}
+    });
+
+  })
+  .controller('LoggerController', ($scope, $window) => {
+    $scope.logger = $window.logger;
+  });
+  </script>
+  <script defer src="https://code.getmdl.io/1.1.3/material.min.js"></script>
+</head>
+<body ng-app="VirtualFence">
+	<div id="server-status" class="connect-request">연결중</div>
+  <div id="map-canvas" ng-controller="MapController">
+    <ui-gmap-google-map center="map.center" zoom="map.zoom" options="map.options" control="mapControl" events="map.events">
+      <ui-gmap-drawing-manager options="drawing.options" control="drawingManagerControl" events="drawing.events"></ui-gmap-drawing-manager>
+    </ui-gmap-google-map>
+  </div>
+  <div class="container button">
+    <button class="mdl-button mdl-js-button mdl-button--fab mdl-button--colored">
+      <i class="material-icons">view_list</i>
+    </button>
+  </div>
+  <div id="logger" class="container log quiet-scroll scroll-styled fixed">
+    <table class="mdl-data-table mdl-js-data-table mdl-shadow--2dp log">
+      <colgroup>
+        <col width="10">
+        <col width="*">
+        <col width="30">
+        <col width="40">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Animal</th>
+          <th>Status</th>
+          <th>Distance</th>
+        </tr>
+      </thead>
+      <tbody id="data">
+      </tbody>
+  </div>
+
+  <script>
+  $(() => {
+    socket.on('connect', () => {
+      $('#server-status')
+      .removeClass('connect-request')
+      .removeClass('connect-fail')
+      .addClass('connect-success')
+      .text('연결됨');
+
+      socket.on('data', (data) => {
+        if(!JSONable(data) || !checkJSON(data)) return;
+
+        let geojson = JSON.parse(data);
+
+        if(checkData(geojson))
+        {
+          let uuid  = 'Animal' + String(geojson.uuid),
+              idx   = 'fence' + geojson.fence,
+              lat   = Number(geojson.lat),
+              lng   = Number(geojson.lon);
+
+          if(fences.has(idx))
+          {
+            let fence   = fences.get(idx),
+                layers  = fence.geojson,
+                polygon = fence.polygon,
+                animals = fence.animals;
+
+            if(!animals.has(uuid))
+            {
+              // Insert New Animal
+              animals.set(uuid, {
+                "marker": new google.maps.Marker({
+                  "position": {
+                    "lat": lat,
+                    "lng": lng
+                  },
+                      "icon": __dirname + '/images/marker/safety.png',
+                       "map": map
+                }),
+                "geojson": {
+                  "type": "Feature",
+                  "geometry": {
+                    "type": "Point",
+                    "coordinates": [lng, lat]
+                  },
+                  "properties": {}
+                }
+              });
+            }
+            else
+            {
+              // Update Animal
+              let marker = animals.get(uuid).marker;
+              marker.setPosition({
+                "lat": lat,
+                "lng": lng
+              });
+              marker.setTitle(String(uuid));
+
+              let geojson = animals.get(uuid).geojson;
+              geojson.geometry.coordinates = [lng, lat];
+
+              // Virtualfencing
+              let in_safe   = inside(geojson, layers.safe),
+                  in_warn   = inside(geojson, layers.warn),
+                  in_danger = inside(geojson, layers.danger);
+
+              let status = "Safety";
+              if(in_safe == true) status = "Safety";
+              else if(in_warn == true) status = "Warning";
+              else if(in_danger == true) status = "Danger";
+              else status = "Leave";
+
+              if(status == 'Leave') marker.setOpacity(0.35);
+              else marker.setOpacity(1);
+              marker.setIcon(__dirname + '/images/marker/' + status.toLowerCase() + '.png');
+
+              let edge_safe   = polygon.safe.edges(),
+                  edge_warn   = polygon.warn.edges(),
+                  edge_danger = polygon.danger.edges();
+
+              // Find Closest Edge
+              let closest_point_safe   = polygon.safe.closestPoint(marker),
+                  closest_point_warn   = polygon.warn.closestPoint(marker),
+                  closest_point_danger = polygon.danger.closestPoint(marker);
+
+              // Calculate Distance From Animal's Position to Closest Point Position
+              let distance_safe   = google.maps.geometry.spherical.computeDistanceBetween(closest_point_safe.toLatLng(), marker.getPosition()),
+                  distance_warn   = google.maps.geometry.spherical.computeDistanceBetween(closest_point_warn.toLatLng(), marker.getPosition()),
+                  distance_danger	= google.maps.geometry.spherical.computeDistanceBetween(closest_point_danger.toLatLng(), marker.getPosition());
+
+              // Send Alert
+              socket.emit('alert', {
+                    "uuid": uuid,
+                  "status": status,
+                "distance": {
+                    "safe": distance_safe,
+                    "warn": distance_warn,
+                  "danger": distance_danger
+                }
+              });
+
+              let log = {
+                "uuid": uuid,
+                "status": status,
+                "distance": Number(distance_danger).toFixed(2)
+              };
+
+              let log_status = '<span class="text-success">안전</span>';
+              if(status == 'Safety') log_status = '<span class="text-success">안전</span>';
+              else if(status == 'Warning') log_status = '<span class="text-warning">경고</span>';
+              else if(status == 'Danger') log_status = '<span class="text-danger">위험</span>';
+              else log_status = '<span class="text-danger"><b>이탈</b></span>';
+
+              let log_index = String(uuid).toLowerCase();
+              let log_check = $.find('#' + log_index).length == 0 ? false : true;
+
+              if(log_check === true)
+              {
+                $('#' + log_index).html('<td>#</td><td>' + log.uuid + '</td><td>' + log_status + '</td><td>' + log.distance + '</td>');
+              }
+              else
+              {
+                $('#data').append('<tr id="' + log_index + '"><td>#</td><td>' + log.uuid + '</td><td>' + log_status + '</td><td>' + log.distance + '</td></tr>');
+              }
+
+              $('#data > tr').each((index, element) => {
+                $($(element).children().get(0)).text(index + 1);
+              });
+              
+            }
+          }
+        }
+      });
+
+      socket.on('connect_error', (message) => {
+        $('#server-status')
+        .removeClass('connect-request')
+        .removeClass('connect-success')
+        .addClass('connect-fail')
+        .text('연결실패');
+      });
+
+    });
+
+    $('div.button button').click(() => {
+      $('div.log').slideToggle();
+    });
+
+  });
+
+  let checkData = (geojson) => {
+    if(typeof geojson === 'object')
+    {
+      if((geojson.uuid != undefined)
+         && (geojson.fence != undefined)
+         && (geojson.lat != undefined)
+         && (geojson.lon != undefined)
+         && (geojson.date != undefined)
+         && (geojson.time != undefined)) return true;
+    }
+
+    return false;
+  }
+
+  let sleep = (delay) => {
+    var start = new Date().getTime();
+    while(new Date().getTime() < start + delay);
+  }
+
+  /* Helper Function Start */
+  let JSONable = (str) => {
+    try {	JSON.parse(str); }
+    catch (e) {	return false;	}
+    return true;
+  }
+
+  let checkJSON = (str) => {
+    if (/^[\],:{}\s]*$/
+        .test(str.replace(/\\["\\\/bfnrtu]/g, '@')
+        .replace(/"[^"\\\n\r]*"|true|false|null|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?/g, ']')
+        .replace(/(?:^|:|,)(?:\s*\[)+/g, ''))) return true;
+    else return false;
+  }
+  /* Helper Function End */
+  </script>
+</body>
+</html>
