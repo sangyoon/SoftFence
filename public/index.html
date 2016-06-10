@@ -59,6 +59,7 @@
   <script src="./js/geojson.js"></script>
   <script src="./js/inside.js"></script>
   <script src="./js/polyk.js"></script>
+  <script defer src="https://code.getmdl.io/1.1.3/material.min.js"></script>
 
   <script>
     var socket = Socket('http://222.116.135.139:3000');
@@ -310,19 +311,16 @@
     $scope.logger = $window.logger;
   });
   </script>
-  <script defer src="https://code.getmdl.io/1.1.3/material.min.js"></script>
 </head>
 <body ng-app="VirtualFence">
-	<div id="server-status" class="connect-request">연결중</div>
+  <div id="server-status" class="connect-request">연결중</div>
   <div id="map-canvas" ng-controller="MapController">
     <ui-gmap-google-map center="map.center" zoom="map.zoom" options="map.options" control="mapControl" events="map.events">
       <ui-gmap-drawing-manager options="drawing.options" control="drawingManagerControl" events="drawing.events"></ui-gmap-drawing-manager>
     </ui-gmap-google-map>
   </div>
   <div class="container button">
-    <button class="mdl-button mdl-js-button mdl-button--fab mdl-button--colored">
-      <i class="material-icons">view_list</i>
-    </button>
+    <button class="mdl-button mdl-js-button mdl-button--fab mdl-button--colored"><i class="material-icons">view_list</i></button>
   </div>
   <div id="logger" class="container log quiet-scroll scroll-styled fixed">
     <table class="mdl-data-table mdl-js-data-table mdl-shadow--2dp log">
@@ -342,194 +340,184 @@
       </thead>
       <tbody id="data">
       </tbody>
+    </table>
   </div>
 
   <script>
-  $(() => {
-    socket.on('connect', () => {
-      $('#server-status')
-      .removeClass('connect-request')
-      .removeClass('connect-fail')
-      .addClass('connect-success')
-      .text('연결됨');
+    $(() => {
+      socket.on('connect', () => {
+        $('#server-status')
+        .removeClass('connect-request')
+        .removeClass('connect-fail')
+        .addClass('connect-success')
+        .text('연결됨');
 
-      socket.on('data', (data) => {
-        if(!JSONable(data) || !checkJSON(data)) return;
+        socket.on('data', (data) => {
+          if(!JSONable(data) || !checkJSON(data)) return;
 
-        let geojson = JSON.parse(data);
+          let geojson = JSON.parse(data);
 
-        if(checkData(geojson))
-        {
-          let uuid  = 'Animal' + String(geojson.uuid),
-              idx   = 'fence' + geojson.fence,
-              lat   = Number(geojson.lat),
-              lng   = Number(geojson.lon);
-
-          if(fences.has(idx))
+         if(checkData(geojson))
           {
-            let fence   = fences.get(idx),
-                layers  = fence.geojson,
-                polygon = fence.polygon,
-                animals = fence.animals;
+           let uuid  = 'Animal' + String(geojson.uuid),
+               idx   = 'fence' + geojson.fence,
+               lat   = Number(geojson.lat),
+               lng   = Number(geojson.lon);
 
-            if(!animals.has(uuid))
-            {
-              // Insert New Animal
-              animals.set(uuid, {
-                "marker": new google.maps.Marker({
-                  "position": {
-                    "lat": lat,
-                    "lng": lng
-                  },
-                      "icon": __dirname + '/images/marker/safety.png',
-                       "map": map
-                }),
-                "geojson": {
-                  "type": "Feature",
-                  "geometry": {
-                    "type": "Point",
-                    "coordinates": [lng, lat]
-                  },
-                  "properties": {}
-                }
-              });
-            }
-            else
-            {
-              // Update Animal
-              let marker = animals.get(uuid).marker;
-              marker.setPosition({
-                "lat": lat,
-                "lng": lng
-              });
-              marker.setTitle(String(uuid));
+           if(fences.has(idx))
+           {
+              let fence   = fences.get(idx),
+                  layers  = fence.geojson,
+                  polygon = fence.polygon,
+                  animals = fence.animals;
 
-              let geojson = animals.get(uuid).geojson;
-              geojson.geometry.coordinates = [lng, lat];
-
-              // Virtualfencing
-              let in_safe   = inside(geojson, layers.safe),
-                  in_warn   = inside(geojson, layers.warn),
-                  in_danger = inside(geojson, layers.danger);
-
-              let status = "Safety";
-              if(in_safe == true) status = "Safety";
-              else if(in_warn == true) status = "Warning";
-              else if(in_danger == true) status = "Danger";
-              else status = "Leave";
-
-              if(status == 'Leave') marker.setOpacity(0.35);
-              else marker.setOpacity(1);
-              marker.setIcon(__dirname + '/images/marker/' + status.toLowerCase() + '.png');
-
-              let edge_safe   = polygon.safe.edges(),
-                  edge_warn   = polygon.warn.edges(),
-                  edge_danger = polygon.danger.edges();
-
-              // Find Closest Edge
-              let closest_point_safe   = polygon.safe.closestPoint(marker),
-                  closest_point_warn   = polygon.warn.closestPoint(marker),
-                  closest_point_danger = polygon.danger.closestPoint(marker);
-
-              // Calculate Distance From Animal's Position to Closest Point Position
-              let distance_safe   = google.maps.geometry.spherical.computeDistanceBetween(closest_point_safe.toLatLng(), marker.getPosition()),
-                  distance_warn   = google.maps.geometry.spherical.computeDistanceBetween(closest_point_warn.toLatLng(), marker.getPosition()),
-                  distance_danger	= google.maps.geometry.spherical.computeDistanceBetween(closest_point_danger.toLatLng(), marker.getPosition());
-
-              // Send Alert
-              socket.emit('alert', {
-                    "uuid": uuid,
-                  "status": status,
-                "distance": {
-                    "safe": distance_safe,
-                    "warn": distance_warn,
-                  "danger": distance_danger
-                }
-              });
-
-              let log = {
-                "uuid": uuid,
-                "status": status,
-                "distance": Number(distance_danger).toFixed(2)
-              };
-
-              let log_status = '<span class="text-success">안전</span>';
-              if(status == 'Safety') log_status = '<span class="text-success">안전</span>';
-              else if(status == 'Warning') log_status = '<span class="text-warning">경고</span>';
-              else if(status == 'Danger') log_status = '<span class="text-danger">위험</span>';
-              else log_status = '<span class="text-danger"><b>이탈</b></span>';
-
-              let log_index = String(uuid).toLowerCase();
-              let log_check = $.find('#' + log_index).length == 0 ? false : true;
-
-              if(log_check === true)
+              if(!animals.has(uuid))
               {
-                $('#' + log_index).html('<td>#</td><td>' + log.uuid + '</td><td>' + log_status + '</td><td>' + log.distance + '</td>');
+                // Insert New Animal
+                animals.set(uuid, {
+                  "marker": new google.maps.Marker({
+                    "position": {
+                      "lat": lat,
+                      "lng": lng
+                    },
+                    "icon": __dirname + '/images/marker/safety.png',
+                     "map": map
+                  }),
+                  "geojson": {
+                    "type": "Feature",
+                    "geometry": {
+                      "type": "Point",
+                      "coordinates": [lng, lat]
+                    },
+                    "properties": {}
+                  }
+                });
               }
               else
               {
-                $('#data').append('<tr id="' + log_index + '"><td>#</td><td>' + log.uuid + '</td><td>' + log_status + '</td><td>' + log.distance + '</td></tr>');
-              }
+                // Update Animal
+                let marker = animals.get(uuid).marker;
+                marker.setPosition({
+                  "lat": lat,
+                  "lng": lng
+                });
+                marker.setTitle(String(uuid));  
+  
+                let geojson = animals.get(uuid).geojson;
+                geojson.geometry.coordinates = [lng, lat];
 
-              $('#data > tr').each((index, element) => {
-                $($(element).children().get(0)).text(index + 1);
-              });
-              
+                // Virtualfencing
+                let in_safe   = inside(geojson, layers.safe),
+                    in_warn   = inside(geojson, layers.warn),
+                    in_danger = inside(geojson, layers.danger);
+
+                let status = "Safety";
+                if(in_safe == true) status = "Safety";
+                else if(in_warn == true) status = "Warning";
+                else if(in_danger == true) status = "Danger";
+                else status = "Leave";
+
+                if(status == 'Leave') marker.setOpacity(0.35);
+                else marker.setOpacity(1);
+                marker.setIcon(__dirname + '/images/marker/' + status.toLowerCase() + '.png');
+
+                let edge_safe   = polygon.safe.edges(),
+                    edge_warn   = polygon.warn.edges(),
+                    edge_danger = polygon.danger.edges();
+
+                // Find Closest Edge
+                let closest_point_safe   = polygon.safe.closestPoint(marker),
+                    closest_point_warn   = polygon.warn.closestPoint(marker),
+                    closest_point_danger = polygon.danger.closestPoint(marker);
+
+                // Calculate Distance From Animal's Position to Closest Point Position
+                let distance_safe   = google.maps.geometry.spherical.computeDistanceBetween(closest_point_safe.toLatLng(), marker.getPosition()),
+                    distance_warn   = google.maps.geometry.spherical.computeDistanceBetween(closest_point_warn.toLatLng(), marker.getPosition()),
+                    distance_danger	= google.maps.geometry.spherical.computeDistanceBetween(closest_point_danger.toLatLng(), marker.getPosition());
+
+                // Send Alert
+                socket.emit('alert', {
+                  "uuid": uuid,
+                  "status": status,
+                  "distance": {
+                    "safe": distance_safe,
+                    "warn": distance_warn,
+                    "danger": distance_danger
+                  }
+                });
+
+                let log = {
+                  "uuid": uuid,
+                  "status": status,
+                  "distance": Number(distance_danger).toFixed(2)
+                };
+
+                let log_status = '<span class="text-success">안전</span>';
+                if(status == 'Safety') log_status = '<span class="text-success">안전</span>';
+                else if(status == 'Warning') log_status = '<span class="text-warning">경고</span>';
+                else if(status == 'Danger') log_status = '<span class="text-danger">위험</span>';
+                else log_status = '<span class="text-danger"><b>이탈</b></span>';
+
+                let log_index = String(uuid).toLowerCase();
+                let log_check = $.find('#' + log_index).length == 0 ? false : true;
+
+                if(log_check === true)
+                {
+                  $('#' + log_index).html('<td>#</td><td>' + log.uuid + '</td><td>' + log_status + '</td><td>' + log.distance + '</td>');
+                }
+                else
+                {
+                  $('#data').append('<tr id="' + log_index + '"><td>#</td><td>' + log.uuid + '</td><td>' + log_status + '</td><td>' + log.distance + '</td></tr>');
+                }
+
+                $('#data > tr').each((index, element) => {
+                  $($(element).children().get(0)).text(index + 1);
+                });
+              }
             }
           }
-        }
+        });
+
+        socket.on('connect_error', (message) => {
+          $('#server-status')
+          .removeClass('connect-request')
+          .removeClass('connect-success')
+          .addClass('connect-fail')
+          .text('연결실패');
+        });
       });
 
-      socket.on('connect_error', (message) => {
-        $('#server-status')
-        .removeClass('connect-request')
-        .removeClass('connect-success')
-        .addClass('connect-fail')
-        .text('연결실패');
+      $('div.button button').click(() => {
+        $('div.log').slideToggle();
       });
-
     });
 
-    $('div.button button').click(() => {
-      $('div.log').slideToggle();
-    });
-
-  });
-
-  let checkData = (geojson) => {
-    if(typeof geojson === 'object')
-    {
-      if((geojson.uuid != undefined)
-         && (geojson.fence != undefined)
-         && (geojson.lat != undefined)
-         && (geojson.lon != undefined)
-         && (geojson.date != undefined)
-         && (geojson.time != undefined)) return true;
+    let checkData = (geojson) => {
+      if(typeof geojson === 'object')
+      {
+        if((geojson.uuid != undefined) && (geojson.fence != undefined) && (geojson.lat != undefined) && (geojson.lon != undefined) && (geojson.date != undefined)  && (geojson.time != undefined)) return true;
+      }
+      
+      return false;
     }
 
-    return false;
-  }
+   let sleep = (delay) => {
+     var start = new Date().getTime();
+     while(new Date().getTime() < start + delay);
+   }
 
-  let sleep = (delay) => {
-    var start = new Date().getTime();
-    while(new Date().getTime() < start + delay);
-  }
+    /* Helper Function Start */
+    let JSONable = (str) => {
+      try {	JSON.parse(str); }
+      catch (e) {	return false;	}
+      return true;
+    }
 
-  /* Helper Function Start */
-  let JSONable = (str) => {
-    try {	JSON.parse(str); }
-    catch (e) {	return false;	}
-    return true;
-  }
-
-  let checkJSON = (str) => {
-    if (/^[\],:{}\s]*$/
-        .test(str.replace(/\\["\\\/bfnrtu]/g, '@')
-        .replace(/"[^"\\\n\r]*"|true|false|null|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?/g, ']')
-        .replace(/(?:^|:|,)(?:\s*\[)+/g, ''))) return true;
-    else return false;
-  }
-  /* Helper Function End */
+    let checkJSON = (str) => {
+      if (/^[\],:{}\s]*$/.test(str.replace(/\\["\\\/bfnrtu]/g, '@').replace(/"[^"\\\n\r]*"|true|false|null|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?/g, ']').replace(/(?:^|:|,)(?:\s*\[)+/g, ''))) return true;
+      else return false;
+    }
+    /* Helper Function End */
   </script>
 </body>
 </html>
